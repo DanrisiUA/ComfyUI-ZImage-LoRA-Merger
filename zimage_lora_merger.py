@@ -1,12 +1,13 @@
 """
-Z-Image Turbo Multi-LoRA Merger
-Кастомная нода для решения проблемы "выжженности" при использовании нескольких LoRA
-на дистилированных моделях типа z-image turbo.
+Z-Image LoRA Merger for ComfyUI
+Custom nodes for combining multiple LoRAs without overexposure on distilled models.
 
-Проблема: стандартное применение LoRA суммирует эффекты аддитивно, что приводит
-к перенасыщению на дистилированных моделях.
+Problem: Standard LoRA application adds effects additively, causing overexposure
+on distilled models like Z-Image Turbo, SDXL-Turbo, LCM, etc.
 
-Решение: различные стратегии смешивания LoRA для нормализации суммарного эффекта.
+Solution: Various blending strategies to normalize the combined LoRA effect.
+
+Author: DanrisiUA (https://github.com/DanrisiUA)
 """
 
 import torch
@@ -20,17 +21,17 @@ import comfy.lora
 
 class ZImageLoRAMerger:
     """
-    Нода для объединения нескольких LoRA с различными стратегиями смешивания,
-    оптимизированная для z-image turbo и других дистилированных моделей.
+    Node for combining multiple LoRAs with various blending strategies,
+    optimized for Z-Image Turbo and other distilled models.
     """
     
     BLEND_MODES = [
-        "normalize",      # Нормализует суммарную силу к target_strength
-        "average",        # Усредняет эффекты LoRA
-        "sqrt_scale",     # Масштабирует каждую LoRA на 1/sqrt(n)
-        "linear_decay",   # Линейное уменьшение силы: 1, 0.5, 0.33, ...
-        "geometric_decay",# Геометрическое уменьшение: 1, 0.5, 0.25, ...
-        "additive",       # Стандартное аддитивное (для сравнения)
+        "normalize",      # Normalizes total strength to target_strength
+        "average",        # Averages LoRA effects
+        "sqrt_scale",     # Scales each LoRA by 1/sqrt(n)
+        "linear_decay",   # Linear decay: 1, 0.5, 0.33, ...
+        "geometric_decay",# Geometric decay: 1, 0.5, 0.25, ...
+        "additive",       # Standard additive (for comparison)
     ]
     
     def __init__(self):
@@ -41,25 +42,25 @@ class ZImageLoRAMerger:
         lora_list = folder_paths.get_filename_list("loras")
         return {
             "required": {
-                "model": ("MODEL", {"tooltip": "Модель для применения LoRA"}),
-                "clip": ("CLIP", {"tooltip": "CLIP модель"}),
-                "blend_mode": (cls.BLEND_MODES, {"default": "normalize", "tooltip": "Режим смешивания LoRA"}),
+                "model": ("MODEL", {"tooltip": "The model to apply LoRA to"}),
+                "clip": ("CLIP", {"tooltip": "The CLIP model"}),
+                "blend_mode": (cls.BLEND_MODES, {"default": "normalize", "tooltip": "LoRA blending mode"}),
                 "target_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, 
-                                              "tooltip": "Целевая суммарная сила (для normalize/average)"}),
-                "lora_1": (["None"] + lora_list, {"tooltip": "Первая LoRA"}),
+                                              "tooltip": "Target total strength (for normalize/average)"}),
+                "lora_1": (["None"] + lora_list, {"tooltip": "First LoRA"}),
                 "strength_1": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
-                "lora_2": (["None"] + lora_list, {"tooltip": "Вторая LoRA"}),
+                "lora_2": (["None"] + lora_list, {"tooltip": "Second LoRA"}),
                 "strength_2": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
             },
             "optional": {
-                "lora_3": (["None"] + lora_list, {"tooltip": "Третья LoRA"}),
+                "lora_3": (["None"] + lora_list, {"tooltip": "Third LoRA"}),
                 "strength_3": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
-                "lora_4": (["None"] + lora_list, {"tooltip": "Четвертая LoRA"}),
+                "lora_4": (["None"] + lora_list, {"tooltip": "Fourth LoRA"}),
                 "strength_4": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
-                "lora_5": (["None"] + lora_list, {"tooltip": "Пятая LoRA"}),
+                "lora_5": (["None"] + lora_list, {"tooltip": "Fifth LoRA"}),
                 "strength_5": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
                 "clip_strength_multiplier": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
-                                                       "tooltip": "Множитель силы для CLIP"}),
+                                                       "tooltip": "Strength multiplier for CLIP"}),
             }
         }
     
@@ -67,10 +68,10 @@ class ZImageLoRAMerger:
     RETURN_NAMES = ("model", "clip")
     FUNCTION = "merge_loras"
     CATEGORY = "loaders/lora"
-    DESCRIPTION = "Объединяет несколько LoRA с нормализацией для z-image turbo и других дистилированных моделей"
+    DESCRIPTION = "Combines multiple LoRAs with normalization for Z-Image Turbo and other distilled models"
     
     def _load_lora(self, lora_name):
-        """Загружает LoRA файл с кэшированием"""
+        """Loads LoRA file with caching"""
         if lora_name == "None" or lora_name is None:
             return None
             
@@ -84,20 +85,20 @@ class ZImageLoRAMerger:
     
     def _calculate_blend_factors(self, strengths, blend_mode, target_strength):
         """
-        Вычисляет коэффициенты смешивания для каждой LoRA
-        в зависимости от выбранного режима.
+        Calculates blending coefficients for each LoRA
+        based on the selected mode.
         """
         n = len(strengths)
         if n == 0:
             return []
         
         if blend_mode == "additive":
-            # Стандартное аддитивное применение
+            # Standard additive application
             return strengths
         
         elif blend_mode == "normalize":
-            # Нормализует так, чтобы сумма квадратов сил = target_strength^2
-            # Это сохраняет "энергию" эффекта
+            # Normalizes so that sum of squared strengths = target_strength^2
+            # This preserves the "energy" of the effect
             sum_sq = sum(s*s for s in strengths)
             if sum_sq == 0:
                 return [0.0] * n
@@ -105,23 +106,23 @@ class ZImageLoRAMerger:
             return [s * scale for s in strengths]
         
         elif blend_mode == "average":
-            # Простое усреднение с учетом target_strength
+            # Simple averaging with target_strength
             scale = target_strength / n
             return [s * scale for s in strengths]
         
         elif blend_mode == "sqrt_scale":
-            # Масштабирует на 1/sqrt(n) - сохраняет баланс при добавлении LoRA
+            # Scales by 1/sqrt(n) - maintains balance when adding LoRAs
             scale = 1.0 / math.sqrt(n)
             return [s * scale for s in strengths]
         
         elif blend_mode == "linear_decay":
-            # Каждая последующая LoRA имеет меньший вес: 1, 0.5, 0.33, 0.25, ...
+            # Each subsequent LoRA has less weight: 1, 0.5, 0.33, 0.25, ...
             factors = [1.0 / (i + 1) for i in range(n)]
             total = sum(factors)
             return [strengths[i] * factors[i] * target_strength / total for i in range(n)]
         
         elif blend_mode == "geometric_decay":
-            # Геометрическое убывание: 1, 0.5, 0.25, 0.125, ...
+            # Geometric decay: 1, 0.5, 0.25, 0.125, ...
             factors = [0.5 ** i for i in range(n)]
             total = sum(factors)
             return [strengths[i] * factors[i] * target_strength / total for i in range(n)]
@@ -136,10 +137,10 @@ class ZImageLoRAMerger:
                     lora_5="None", strength_5=1.0,
                     clip_strength_multiplier=1.0):
         """
-        Основная функция объединения LoRA.
+        Main function for combining LoRAs.
         """
         
-        # Собираем активные LoRA
+        # Collect active LoRAs
         loras_data = []
         for lora_name, strength in [
             (lora_1, strength_1),
@@ -156,7 +157,7 @@ class ZImageLoRAMerger:
         if len(loras_data) == 0:
             return (model, clip)
         
-        # Вычисляем коэффициенты смешивания
+        # Calculate blend factors
         original_strengths = [s for _, s in loras_data]
         blended_strengths = self._calculate_blend_factors(
             original_strengths, blend_mode, target_strength
@@ -166,7 +167,7 @@ class ZImageLoRAMerger:
         logging.info(f"  Original strengths: {original_strengths}")
         logging.info(f"  Blended strengths:  {[round(s, 4) for s in blended_strengths]}")
         
-        # Применяем LoRA последовательно с вычисленными коэффициентами
+        # Apply LoRAs sequentially with calculated coefficients
         new_model = model
         new_clip = clip
         
@@ -181,8 +182,8 @@ class ZImageLoRAMerger:
 
 class ZImageLoRAStack:
     """
-    Нода для создания стека LoRA, который можно использовать с ZImageLoRAStackApply.
-    Позволяет более гибко управлять LoRA через соединения.
+    Node for creating a LoRA stack that can be used with ZImageLoRAStackApply.
+    Allows more flexible LoRA management through connections.
     """
     
     def __init__(self):
@@ -193,11 +194,11 @@ class ZImageLoRAStack:
         lora_list = folder_paths.get_filename_list("loras")
         return {
             "required": {
-                "lora_name": (lora_list, {"tooltip": "LoRA файл"}),
+                "lora_name": (lora_list, {"tooltip": "LoRA file"}),
                 "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
             },
             "optional": {
-                "lora_stack": ("LORA_STACK", {"tooltip": "Предыдущий стек LoRA"}),
+                "lora_stack": ("LORA_STACK", {"tooltip": "Previous LoRA stack"}),
             }
         }
     
@@ -205,7 +206,7 @@ class ZImageLoRAStack:
     RETURN_NAMES = ("lora_stack",)
     FUNCTION = "add_to_stack"
     CATEGORY = "loaders/lora"
-    DESCRIPTION = "Добавляет LoRA в стек для последующего применения с ZImageLoRAStackApply"
+    DESCRIPTION = "Adds LoRA to stack for later application with ZImageLoRAStackApply"
     
     def add_to_stack(self, lora_name, strength, lora_stack=None):
         lora_list = list(lora_stack) if lora_stack else []
@@ -224,7 +225,7 @@ class ZImageLoRAStack:
 
 class ZImageLoRAStackApply:
     """
-    Применяет стек LoRA с различными режимами смешивания.
+    Applies a LoRA stack with various blending modes.
     """
     
     BLEND_MODES = ZImageLoRAMerger.BLEND_MODES
@@ -233,9 +234,9 @@ class ZImageLoRAStackApply:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": ("MODEL", {"tooltip": "Модель для применения LoRA"}),
-                "clip": ("CLIP", {"tooltip": "CLIP модель"}),
-                "lora_stack": ("LORA_STACK", {"tooltip": "Стек LoRA"}),
+                "model": ("MODEL", {"tooltip": "The model to apply LoRA to"}),
+                "clip": ("CLIP", {"tooltip": "The CLIP model"}),
+                "lora_stack": ("LORA_STACK", {"tooltip": "LoRA stack"}),
                 "blend_mode": (cls.BLEND_MODES, {"default": "normalize"}),
                 "target_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05}),
                 "clip_strength_multiplier": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05}),
@@ -246,10 +247,10 @@ class ZImageLoRAStackApply:
     RETURN_NAMES = ("model", "clip")
     FUNCTION = "apply_stack"
     CATEGORY = "loaders/lora"
-    DESCRIPTION = "Применяет стек LoRA с выбранным режимом смешивания"
+    DESCRIPTION = "Applies LoRA stack with selected blending mode"
     
     def _calculate_blend_factors(self, strengths, blend_mode, target_strength):
-        """Используем ту же логику что и в ZImageLoRAMerger"""
+        """Same logic as ZImageLoRAMerger"""
         n = len(strengths)
         if n == 0:
             return []
@@ -306,17 +307,17 @@ class ZImageLoRAStackApply:
 
 class ZImageLoRAMergeToSingle:
     """
-    Объединяет веса нескольких LoRA в одну "виртуальную" LoRA
-    путем предварительного слияния весов перед применением к модели.
+    Merges weights of multiple LoRAs into a single "virtual" LoRA
+    by pre-merging weights before applying to the model.
     
-    Это может дать лучшие результаты чем последовательное применение,
-    особенно для перекрывающихся весов.
+    This can give better results than sequential application,
+    especially for overlapping weights.
     """
     
     MERGE_METHODS = [
-        "weighted_sum",    # Взвешенная сумма
+        "weighted_sum",    # Weighted sum
         "add_difference",  # A + (B - C) * weight
-        "weighted_average",# Взвешенное среднее
+        "weighted_average",# Weighted average
     ]
     
     def __init__(self):
@@ -331,7 +332,7 @@ class ZImageLoRAMergeToSingle:
                 "clip": ("CLIP",),
                 "merge_method": (cls.MERGE_METHODS, {"default": "weighted_average"}),
                 "output_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
-                                              "tooltip": "Сила итогового объединенного LoRA"}),
+                                              "tooltip": "Strength of the merged LoRA"}),
                 "lora_1": (["None"] + lora_list,),
                 "weight_1": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05}),
                 "lora_2": (["None"] + lora_list,),
@@ -348,7 +349,7 @@ class ZImageLoRAMergeToSingle:
     RETURN_NAMES = ("model", "clip")
     FUNCTION = "merge_to_single"
     CATEGORY = "loaders/lora"
-    DESCRIPTION = "Объединяет несколько LoRA в одну перед применением - оптимально для z-image turbo"
+    DESCRIPTION = "Merges multiple LoRAs into one before applying - optimal for Z-Image Turbo"
     
     def _load_lora(self, lora_name):
         if lora_name == "None" or lora_name is None:
@@ -362,9 +363,9 @@ class ZImageLoRAMergeToSingle:
     
     def _merge_lora_weights(self, loras_with_weights, method):
         """
-        Объединяет веса LoRA в один словарь.
-        Обрабатывает LoRA с разным рангом - несовместимые слои берутся 
-        пропорционально весам из той LoRA, которая их имеет.
+        Merges LoRA weights into a single dictionary.
+        Handles LoRAs with different ranks - incompatible layers are taken
+        proportionally from the LoRA that has them.
         """
         if len(loras_with_weights) == 0:
             return {}
@@ -373,7 +374,7 @@ class ZImageLoRAMergeToSingle:
             lora, weight = loras_with_weights[0]
             return {k: v * weight for k, v in lora.items()}
         
-        # Собираем все ключи
+        # Collect all keys
         all_keys = set()
         for lora, _ in loras_with_weights:
             all_keys.update(lora.keys())
@@ -394,21 +395,21 @@ class ZImageLoRAMergeToSingle:
                 merged[key] = tensors_weights[0][0] * tensors_weights[0][1]
                 continue
             
-            # Получаем референсную форму и dtype
+            # Get reference shape and dtype
             ref_tensor = tensors_weights[0][0]
             ref_shape = ref_tensor.shape
             device = ref_tensor.device
             dtype = ref_tensor.dtype
             
-            # Фильтруем только тензоры с совместимыми формами
+            # Filter only tensors with compatible shapes
             compatible_tensors = [(t, w) for t, w in tensors_weights if t.shape == ref_shape]
             
-            # Если формы не совпадают, берём взвешенную сумму только совместимых
-            # или первый тензор если совместимых нет
+            # If shapes don't match, take weighted sum of compatible ones only
+            # or first tensor if none are compatible
             if len(compatible_tensors) < len(tensors_weights):
                 skipped_keys += 1
                 if len(compatible_tensors) == 0:
-                    # Нет совместимых - берём первый с его весом
+                    # No compatible - take first with its weight
                     merged[key] = ref_tensor * tensors_weights[0][1]
                     continue
                 elif len(compatible_tensors) == 1:
@@ -431,7 +432,7 @@ class ZImageLoRAMergeToSingle:
                 merged[key] = result
                 
             elif method == "add_difference":
-                # Первый LoRA + разница с остальными
+                # First LoRA + difference with others
                 result = tensors_weights[0][0].clone() * tensors_weights[0][1]
                 for tensor, weight in tensors_weights[1:]:
                     diff = tensor.to(device=device, dtype=dtype) - tensors_weights[0][0]
@@ -472,21 +473,21 @@ class ZImageLoRAMergeToSingle:
 
 class ZImageLoRATrueMerge:
     """
-    "Честное" слияние LoRA через вычисление полных diff'ов.
+    "True" LoRA merging by computing full weight diffs.
     
-    Работает для LoRA ЛЮБЫХ рангов!
+    Works for LoRAs of ANY rank!
     
-    Вместо объединения сырых A/B матриц (что невозможно для разных рангов),
-    вычисляет полный diff = A @ B × alpha для каждой LoRA,
-    затем усредняет эти diff'ы и применяет как один патч.
+    Instead of merging raw A/B matrices (impossible for different ranks),
+    computes the full diff = A @ B × alpha for each LoRA,
+    then averages these diffs and applies as a single patch.
     
-    ⚠️ Требует больше памяти и времени чем обычное применение.
+    Warning: Requires more memory and time than standard application.
     """
     
     MERGE_MODES = [
-        "weighted_average",  # Взвешенное среднее diff'ов
-        "weighted_sum",      # Взвешенная сумма (может быть ярче)
-        "normalize",         # Нормализация по энергии
+        "weighted_average",  # Weighted average of diffs
+        "weighted_sum",      # Weighted sum (can be brighter)
+        "normalize",         # Energy normalization
     ]
     
     def __init__(self):
@@ -497,11 +498,11 @@ class ZImageLoRATrueMerge:
         lora_list = folder_paths.get_filename_list("loras")
         return {
             "required": {
-                "model": ("MODEL", {"tooltip": "Модель для применения LoRA"}),
-                "clip": ("CLIP", {"tooltip": "CLIP модель"}),
+                "model": ("MODEL", {"tooltip": "The model to apply LoRA to"}),
+                "clip": ("CLIP", {"tooltip": "The CLIP model"}),
                 "merge_mode": (cls.MERGE_MODES, {"default": "weighted_average"}),
                 "output_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
-                                              "tooltip": "Сила итогового объединённого эффекта"}),
+                                              "tooltip": "Strength of the merged effect"}),
                 "lora_1": (["None"] + lora_list,),
                 "strength_1": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
                 "lora_2": (["None"] + lora_list,),
@@ -520,10 +521,10 @@ class ZImageLoRATrueMerge:
     RETURN_NAMES = ("model", "clip")
     FUNCTION = "true_merge"
     CATEGORY = "loaders/lora"
-    DESCRIPTION = "Честное слияние LoRA любых рангов через вычисление полных diff'ов"
+    DESCRIPTION = "True LoRA merging for any rank combination by computing full weight diffs"
     
     def _load_lora(self, lora_name):
-        """Загружает LoRA файл с кэшированием"""
+        """Loads LoRA file with caching"""
         if lora_name == "None" or lora_name is None:
             return None
         if lora_name in self.loaded_loras:
@@ -535,10 +536,10 @@ class ZImageLoRATrueMerge:
     
     def _get_lora_key_info(self, lora_dict, key_prefix):
         """
-        Извлекает информацию о LoRA для заданного ключа.
-        Возвращает (mat_up, mat_down, alpha, mid) или None.
+        Extracts LoRA information for the given key.
+        Returns (mat_up, mat_down, alpha, mid) or None.
         """
-        # Форматы LoRA ключей
+        # LoRA key formats
         formats = [
             ("{}.lora_up.weight", "{}.lora_down.weight"),           # regular
             ("{}_lora.up.weight", "{}_lora.down.weight"),           # diffusers
@@ -560,9 +561,9 @@ class ZImageLoRATrueMerge:
                 if alpha is not None:
                     alpha = alpha.item()
                 else:
-                    alpha = mat_down.shape[0]  # rank как дефолт
+                    alpha = mat_down.shape[0]  # rank as default
                 
-                # Mid (для LoCon)
+                # Mid (for LoCon)
                 mid_key = "{}.lora_mid.weight".format(key_prefix)
                 mid = lora_dict.get(mid_key, None)
                 
@@ -572,14 +573,14 @@ class ZImageLoRATrueMerge:
     
     def _compute_lora_diff(self, mat_up, mat_down, alpha, mid, target_shape):
         """
-        Вычисляет полный diff для одной LoRA.
+        Computes full diff for a single LoRA.
         diff = mat_up @ mat_down × (alpha / rank)
         """
         rank = mat_down.shape[0]
         scale = alpha / rank
         
         if mid is not None:
-            # LoCon с mid матрицей (редко)
+            # LoCon with mid matrix (rare)
             final_shape = [mat_down.shape[1], mat_down.shape[0], mid.shape[2], mid.shape[3]]
             mat_down = (
                 torch.mm(
@@ -590,24 +591,24 @@ class ZImageLoRATrueMerge:
                 .transpose(0, 1)
             )
         
-        # Вычисляем diff
+        # Compute diff
         diff = torch.mm(
             mat_up.flatten(start_dim=1).float(),
             mat_down.flatten(start_dim=1).float()
         )
         
-        # Пытаемся привести к целевой форме
+        # Try to reshape to target shape
         try:
             diff = diff.reshape(target_shape)
         except RuntimeError:
-            # Если форма не совпадает, пропускаем
+            # If shape doesn't match, skip
             return None
         
         return diff * scale
     
     def _merge_diffs(self, diffs_with_weights, mode):
         """
-        Объединяет список diff'ов с их весами.
+        Merges a list of diffs with their weights.
         """
         if len(diffs_with_weights) == 0:
             return None
@@ -616,7 +617,7 @@ class ZImageLoRATrueMerge:
             diff, weight = diffs_with_weights[0]
             return diff * weight
         
-        # Все diff'ы должны быть одной формы (проверено при вычислении)
+        # All diffs should have the same shape (verified during computation)
         ref_diff = diffs_with_weights[0][0]
         device = ref_diff.device
         dtype = ref_diff.dtype
@@ -637,7 +638,7 @@ class ZImageLoRATrueMerge:
             return result.to(dtype)
         
         elif mode == "normalize":
-            # Нормализация по "энергии" (сумме квадратов весов)
+            # Normalization by "energy" (sum of squared weights)
             weights = [w for _, w in diffs_with_weights]
             sum_sq = sum(w*w for w in weights)
             if sum_sq == 0:
@@ -657,10 +658,10 @@ class ZImageLoRATrueMerge:
                    lora_4="None", strength_4=1.0,
                    clip_strength_multiplier=1.0):
         """
-        Основная функция честного слияния LoRA.
+        Main function for true LoRA merging.
         """
         
-        # Собираем активные LoRA
+        # Collect active LoRAs
         loras_data = []
         for lora_name, strength in [
             (lora_1, strength_1),
@@ -680,7 +681,7 @@ class ZImageLoRATrueMerge:
         for name, _, strength in loras_data:
             logging.info(f"  - {name}: strength={strength}")
         
-        # Получаем key_map для модели
+        # Get key_map for model
         model_keys = {}
         if model is not None:
             model_keys = comfy.lora.model_lora_keys_unet(model.model, {})
@@ -689,11 +690,11 @@ class ZImageLoRATrueMerge:
         if clip is not None:
             clip_keys = comfy.lora.model_lora_keys_clip(clip.cond_stage_model, {})
         
-        # Собираем все ключи из всех LoRA
+        # Collect all keys from all LoRAs
         all_lora_prefixes = set()
         for _, lora_dict, _ in loras_data:
             for key in lora_dict.keys():
-                # Извлекаем префикс (до .lora_up, .lora_down и т.д.)
+                # Extract prefix (before .lora_up, .lora_down, etc.)
                 for suffix in [".lora_up.weight", ".lora_down.weight", "_lora.up.weight", 
                               "_lora.down.weight", ".lora_B.weight", ".lora_A.weight",
                               ".lora.up.weight", ".lora.down.weight", ".alpha"]:
@@ -702,12 +703,12 @@ class ZImageLoRATrueMerge:
                         all_lora_prefixes.add(prefix)
                         break
         
-        # Для каждого ключа вычисляем объединённый diff
+        # For each key, compute merged diff
         merged_patches = {}
         processed_keys = 0
         
         for lora_prefix in all_lora_prefixes:
-            # Находим целевой ключ в модели
+            # Find target key in model
             target_key = None
             is_clip = False
             
@@ -717,7 +718,7 @@ class ZImageLoRATrueMerge:
                 target_key = clip_keys[lora_prefix]
                 is_clip = True
             else:
-                # Пробуем найти напрямую
+                # Try to find directly
                 for k in model_keys:
                     if lora_prefix in k or k in lora_prefix:
                         target_key = model_keys[k]
@@ -729,7 +730,7 @@ class ZImageLoRATrueMerge:
             # Handle tuple keys (for sliced weights)
             actual_key = target_key[0] if isinstance(target_key, tuple) else target_key
             
-            # Получаем форму целевого веса
+            # Get target weight shape
             try:
                 if is_clip:
                     target_weight = comfy.utils.get_attr(clip.cond_stage_model, actual_key)
@@ -739,7 +740,7 @@ class ZImageLoRATrueMerge:
             except:
                 continue
             
-            # Вычисляем diff для каждой LoRA
+            # Compute diff for each LoRA
             diffs_with_weights = []
             for _, lora_dict, strength in loras_data:
                 lora_info = self._get_lora_key_info(lora_dict, lora_prefix)
@@ -755,7 +756,7 @@ class ZImageLoRATrueMerge:
             if len(diffs_with_weights) == 0:
                 continue
             
-            # Объединяем diff'ы
+            # Merge diffs
             merged_diff = self._merge_diffs(diffs_with_weights, merge_mode)
             if merged_diff is not None:
                 merged_patches[target_key] = ("diff", (merged_diff,))
@@ -763,13 +764,13 @@ class ZImageLoRATrueMerge:
         
         logging.info(f"  Processed {processed_keys} weight keys")
         
-        # Применяем к модели
+        # Apply to model
         new_model = model
         new_clip = clip
         
         if model is not None and len(merged_patches) > 0:
             new_model = model.clone()
-            # Фильтруем патчи для модели
+            # Filter patches for model
             model_patches = {k: v for k, v in merged_patches.items() 
                            if not isinstance(k, str) or not k.startswith("clip")}
             new_model.add_patches(model_patches, output_strength)
@@ -777,13 +778,13 @@ class ZImageLoRATrueMerge:
         if clip is not None and len(merged_patches) > 0:
             new_clip = clip.clone()
             clip_strength = output_strength * clip_strength_multiplier
-            # Все патчи применяем к clip (фильтрация по ключам сложнее)
+            # Apply all patches to clip (key filtering is more complex)
             new_clip.add_patches(merged_patches, clip_strength)
         
         return (new_model, new_clip)
 
 
-# Регистрация нод
+# Node registration
 NODE_CLASS_MAPPINGS = {
     "ZImageLoRAMerger": ZImageLoRAMerger,
     "ZImageLoRAStack": ZImageLoRAStack,
@@ -799,4 +800,3 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ZImageLoRAMergeToSingle": "Z-Image LoRA Merge to Single",
     "ZImageLoRATrueMerge": "Z-Image LoRA True Merge",
 }
-
