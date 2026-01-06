@@ -1,6 +1,6 @@
 # Z-Image LoRA Merger for ComfyUI
 
-Custom nodes for combining multiple LoRAs **without the "burned/overexposed" look** on distilled models like **Z-Image Turbo**, **SDXL-Turbo**, **LCM** and similar.
+Custom nodes for combining multiple LoRAs **without the "burned/overexposed" look** on distilled models like **Z-Image Turbo**.
 
 ![ComfyUI](https://img.shields.io/badge/ComfyUI-Custom_Node-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
